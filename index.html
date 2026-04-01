@@ -1272,12 +1272,12 @@ document.getElementById('btn-load-repo-backup')?.addEventListener('click', () =>
 // ============================================================================
 // STARTUP — Auto-load from localStorage or start empty
 // ============================================================================
-function init() {
+async function init() {
   resizeCanvas();
   renderPalette();
   updateBrushHUD();
 
-  // Try auto-load from localStorage
+  // Priority 1: Try auto-load from localStorage (shared with IBC3React editor)
   const stored = localStorage.getItem(STORAGE_KEY);
   if (stored) {
     try {
@@ -1287,9 +1287,21 @@ function init() {
     } catch (e) { console.warn('Failed to load from storage:', e); }
   }
 
-  // Empty map
+  // Priority 2: Auto-fetch current map from repo (works on GitHub Pages and local)
+  document.getElementById('hud-status').textContent = 'Loading map from repository...';
+  try {
+    const resp = await fetch(`${REPO_BASE}/maps/imaginarium-map.json`);
+    if (resp.ok) {
+      const json = await resp.json();
+      loadMapData(json);
+      document.getElementById('hud-status').textContent = 'Map loaded from repository — ready to paint!';
+      return;
+    }
+  } catch (e) { console.warn('Failed to auto-fetch from repo:', e); }
+
+  // Priority 3: Empty map (offline / fetch failed)
   loadMapData(createEmptyMap());
-  document.getElementById('hud-status').textContent = 'IBC Map Painter — No map in storage. Use Load to import.';
+  document.getElementById('hud-status').textContent = 'No map available — use Load Map to import a JSON file.';
 }
 
 init();
