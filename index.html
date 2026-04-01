@@ -108,6 +108,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #111; font
         <button class="tool-btn active" data-tool="paint">Paint</button>
         <button class="tool-btn" data-tool="erase">Erase</button>
         <button class="tool-btn" data-tool="fill">Fill</button>
+        <button class="tool-btn" data-tool="building">Move Bldg</button>
       </div>
     </div>
 
@@ -254,6 +255,17 @@ const OVERLAY_COLORS = {
   'landmark_clock_tower': '#8a5a3a', 'landmark_lighthouse': '#d0d0d0', 'landmark_statue': '#a0a0a0',
 };
 
+// Special display color for random grass brush
+TILE_COLORS[RANDOM_GRASS_ID] = '#5a8a3a';
+
+// Resolve a selected tile ID — handles random grass
+function resolveSelectedTile() {
+  if (selectedTileId === RANDOM_GRASS_ID) {
+    return GRASS_RANDOM_POOL[Math.floor(Math.random() * GRASS_RANDOM_POOL.length)];
+  }
+  return selectedTileId;
+}
+
 // Fallback color resolver
 function tileColor(id) {
   if (!id) return '#333';
@@ -281,8 +293,19 @@ function overlayColor(id) {
 }
 
 // --- Tile catalog for the palette ---
+// Random grass variant pool (same height tiles, for natural variety)
+const GRASS_RANDOM_POOL = [
+  'terrain_grass_067', 'terrain_grass_067', 'terrain_grass_067',  // dominant
+  'terrain_grass_067_Bright',
+  'terrain_grass_067_C',
+  'terrain_grass_067_NB',
+  'terrain_grass_067_NB2',
+];
+const RANDOM_GRASS_ID = '__random_grass__'; // special sentinel for the random brush
+
 // Ground tiles
 const GROUND_TILES = [
+  { id: RANDOM_GRASS_ID, name: 'Random Grass', cat: 'grass' },
   { id: 'terrain_grass_067', name: 'Grass', cat: 'grass' },
   { id: 'terrain_grass_067_Bright', name: 'Grass Bright', cat: 'grass' },
   { id: 'terrain_grass_067_C', name: 'Grass Dark Tuft', cat: 'grass' },
@@ -356,6 +379,10 @@ let spaceHeld = false;
 
 // Entry point placement
 let epBuilding = null; // currently selected building key for entry point placement
+
+// Building move
+let movingBuilding = null; // key of building being dragged
+let selectedBuilding = null; // key of building currently selected (shown in dropdown)
 let brushSize = 1;
 let activeCat = 'all';
 
@@ -605,8 +632,9 @@ function paintAt(col, row) {
         if (activeLayer === 'overlay') { tile.ov = undefined; }
         else { tile.id = undefined; tile.ov = undefined; }
       } else if (tool === 'paint') {
-        if (activeLayer === 'overlay') { tile.ov = selectedTileId; }
-        else { tile.id = selectedTileId; }
+        const resolved = resolveSelectedTile(); // handles random grass
+        if (activeLayer === 'overlay') { tile.ov = resolved; }
+        else { tile.id = resolved; }
       }
 
       const after = { id: tile.id, ov: tile.ov };
@@ -642,8 +670,9 @@ function floodFillAt(col, row) {
     if (currentId !== targetId) continue;
 
     const before = { id: t.id, ov: t.ov };
-    if (activeLayer === 'overlay') t.ov = fillId;
-    else t.id = fillId;
+    const resolved = (fillId === RANDOM_GRASS_ID) ? GRASS_RANDOM_POOL[Math.floor(Math.random() * GRASS_RANDOM_POOL.length)] : fillId;
+    if (activeLayer === 'overlay') t.ov = resolved;
+    else t.id = resolved;
     const after = { id: t.id, ov: t.ov };
     changes.push({ key: k, before, after });
 
@@ -737,6 +766,21 @@ canvas.addEventListener('pointerdown', (e) => {
     return;
   }
 
+  // Building move tool
+  if (tool === 'building') {
+    const bKey = findBuildingAt(tile.col, tile.row);
+    if (bKey) {
+      movingBuilding = bKey;
+      selectedBuilding = bKey;
+      // Update the EP dropdown to show this building
+      const $sel = document.getElementById('ep-select');
+      if ($sel) $sel.value = bKey;
+      document.getElementById('ep-status').textContent = `Selected: ${bKey} — drag to move`;
+      canvas.setPointerCapture(e.pointerId);
+    }
+    return;
+  }
+
   if (tool === 'fill') { floodFillAt(tile.col, tile.row); return; }
 
   // Start painting
@@ -759,6 +803,13 @@ canvas.addEventListener('pointermove', (e) => {
     return;
   }
 
+  // Building drag
+  if (movingBuilding && tile) {
+    moveBuilding(movingBuilding, tile.col, tile.row);
+    render();
+    return;
+  }
+
   if (isPainting && tile) {
     const tileKey = `${tile.col},${tile.row}`;
     if (tileKey !== lastPaintedTile) {
@@ -773,6 +824,7 @@ canvas.addEventListener('pointermove', (e) => {
 canvas.addEventListener('pointerup', (e) => {
   e.preventDefault();
   if (isPanning) { isPanning = false; return; }
+  if (movingBuilding) { movingBuilding = null; return; }
   if (isPainting) {
     isPainting = false;
     if (strokeChanges.length > 0) {
@@ -784,7 +836,7 @@ canvas.addEventListener('pointerup', (e) => {
   }
 });
 
-canvas.addEventListener('pointercancel', () => { isPainting = false; isPanning = false; });
+canvas.addEventListener('pointercancel', () => { isPainting = false; isPanning = false; movingBuilding = null; });
 
 // ============================================================================
 // ZOOM (scroll + pinch)
@@ -866,6 +918,7 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'b' || e.key === 'B') { tool = 'paint'; updateToolUI(); }
   else if (e.key === 'e' || e.key === 'E') { tool = 'erase'; updateToolUI(); }
   else if (e.key === 'f' || e.key === 'F') { tool = 'fill'; updateToolUI(); }
+  else if (e.key === 'm' || e.key === 'M') { tool = 'building'; updateToolUI(); }
   else if (e.key === '[') { brushSize = Math.max(1, brushSize - 1); updateBrushSize(); }
   else if (e.key === ']') { brushSize = Math.min(10, brushSize + 1); updateBrushSize(); }
   else if (e.key === 'Escape') { exitEntryPointMode(); }
@@ -941,7 +994,12 @@ function renderPalette() {
     const el = document.createElement('div');
     el.className = 'tile' + (t.id === selectedTileId ? ' selected' : '');
     const color = activeLayer === 'overlay' ? overlayColor(t.id) : tileColor(t.id);
-    el.innerHTML = `<div class="color-swatch" style="background:${color}"></div><div class="label">${t.name}</div>`;
+    if (t.id === RANDOM_GRASS_ID) {
+      // Multi-stripe swatch to indicate random variety
+      el.innerHTML = `<div class="color-swatch" style="background:linear-gradient(135deg, #5a8a3a 20%, #6a9a4a 35%, #4a7a2a 50%, #508030 65%, #4d7d2d 80%)"></div><div class="label">${t.name}</div>`;
+    } else {
+      el.innerHTML = `<div class="color-swatch" style="background:${color}"></div><div class="label">${t.name}</div>`;
+    }
     el.addEventListener('click', () => {
       selectedTileId = t.id;
       renderPalette();
@@ -964,6 +1022,31 @@ for (const cat of CATEGORIES) {
     renderPalette();
   });
   $tabs.appendChild(tab);
+}
+
+// ============================================================================
+// BUILDING TOOLS — find, move, select
+// ============================================================================
+function findBuildingAt(col, row) {
+  if (!mapData?.buildings) return null;
+  let bestKey = null, bestDist = Infinity;
+  for (const [key, bldg] of Object.entries(mapData.buildings)) {
+    const d = Math.abs(col - bldg.col) + Math.abs(row - bldg.row);
+    if (d <= 3 && d < bestDist) { bestDist = d; bestKey = key; }
+  }
+  return bestKey;
+}
+
+function moveBuilding(key, newCol, newRow) {
+  if (!mapData?.buildings?.[key]) return;
+  mapData.buildings[key].col = newCol;
+  mapData.buildings[key].row = newRow;
+  // Also move entry point to (0, +2)
+  if (mapData.entryPoints?.[key]) {
+    mapData.entryPoints[key].col = newCol;
+    mapData.entryPoints[key].row = newRow + 2;
+  }
+  document.getElementById('ep-status').textContent = `Moved ${key} → (${newCol}, ${newRow})`;
 }
 
 // ============================================================================
