@@ -136,6 +136,20 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #111; font
     </div>
 
     <div class="section">
+      <div class="section-label">Entry Points</div>
+      <div class="tools-row" style="flex-direction:column;gap:4px;">
+        <select id="ep-select" style="width:100%;padding:4px 8px;font-size:11px;background:#252540;color:#ccc;border:1px solid #444;border-radius:4px;">
+          <option value="">-- Select Building --</option>
+        </select>
+        <div class="tools-row">
+          <button class="tool-btn" data-tool="entrypoint" id="btn-ep-place">Place Entry</button>
+          <button class="action-btn" id="btn-ep-clear">Clear</button>
+        </div>
+      </div>
+      <div id="ep-status" style="color:#0f8;font-size:10px;padding:2px 0;"></div>
+    </div>
+
+    <div class="section">
       <div class="section-label">File</div>
       <div class="tools-row">
         <button class="action-btn" id="btn-load">Load Map</button>
@@ -147,7 +161,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #111; font
     <div class="hints">
       <kbd>B</kbd> Paint &nbsp; <kbd>E</kbd> Erase &nbsp; <kbd>F</kbd> Fill<br>
       <kbd>Alt+Click</kbd> Eyedropper &nbsp; <kbd>[</kbd><kbd>]</kbd> Brush size<br>
-      <kbd>Ctrl+Z</kbd> Undo &nbsp; <kbd>Ctrl+Y</kbd> Redo<br>
+      <kbd>Space+Drag</kbd> Pan &nbsp; <kbd>Ctrl+Z</kbd> Undo<br>
       Scroll = zoom &nbsp; Middle/2-finger = pan
     </div>
   </div>
@@ -157,12 +171,29 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #111; font
 <div class="modal-overlay" id="load-modal">
   <div class="modal-box">
     <h3>Load Map JSON</h3>
-    <p style="font-size:12px;color:#888;margin-bottom:8px;">Paste map JSON, pick a file, or load from browser storage.</p>
-    <textarea id="load-textarea" placeholder="Paste imaginarium-map.json contents here..."></textarea>
-    <div class="btn-row">
-      <button class="btn-primary" id="btn-load-paste">Load Pasted</button>
-      <label class="btn-primary" style="padding:6px 16px;border-radius:4px;cursor:pointer;font-size:12px;">Browse... <input type="file" accept=".json" id="btn-load-file" style="display:none"></label>
-      <button class="action-btn" id="btn-load-storage">From Browser</button>
+    <p style="font-size:12px;color:#888;margin-bottom:8px;">Load from the repo, pick a file, paste JSON, or restore from browser storage.</p>
+    <div style="margin-bottom:10px;">
+      <div class="section-label" style="margin-bottom:4px;">From Repository</div>
+      <div class="btn-row">
+        <button class="btn-primary" id="btn-load-repo">Current Map (v13)</button>
+        <button class="action-btn" id="btn-load-repo-backup">v1 Backup (120x100)</button>
+      </div>
+    </div>
+    <div style="margin-bottom:10px;">
+      <div class="section-label" style="margin-bottom:4px;">From Device</div>
+      <div class="btn-row">
+        <label class="btn-primary" style="padding:6px 16px;border-radius:4px;cursor:pointer;font-size:12px;">Browse File... <input type="file" accept=".json" id="btn-load-file" style="display:none"></label>
+        <button class="action-btn" id="btn-load-storage">From Browser</button>
+      </div>
+    </div>
+    <div>
+      <div class="section-label" style="margin-bottom:4px;">Paste JSON</div>
+      <textarea id="load-textarea" placeholder="Paste imaginarium-map.json contents here..."></textarea>
+      <div class="btn-row" style="margin-top:6px;">
+        <button class="action-btn" id="btn-load-paste">Load Pasted</button>
+      </div>
+    </div>
+    <div class="btn-row" style="margin-top:12px;justify-content:flex-end;">
       <button class="btn-cancel" id="btn-load-cancel">Cancel</button>
     </div>
   </div>
@@ -318,6 +349,12 @@ let mapData = null; // { version, cols, rows, tiles: { "col,row": { id, ov, ... 
 let tool = 'paint';
 let activeLayer = 'ground'; // 'ground' or 'overlay'
 let selectedTileId = 'terrain_grass_067';
+
+// Spacebar pan mode (Adobe XD style)
+let spaceHeld = false;
+
+// Entry point placement
+let epBuilding = null; // currently selected building key for entry point placement
 let brushSize = 1;
 let activeCat = 'all';
 
@@ -593,8 +630,8 @@ canvas.addEventListener('pointerdown', (e) => {
   e.preventDefault();
   const tile = pointerToTile(e.clientX, e.clientY);
 
-  // Middle button or two-finger → pan
-  if (e.button === 1 || (e.pointerType === 'touch' && e.isPrimary === false)) {
+  // Middle button, two-finger, OR spacebar held → pan (Adobe XD style)
+  if (e.button === 1 || (e.pointerType === 'touch' && e.isPrimary === false) || (spaceHeld && e.button === 0)) {
     isPanning = true;
     panStartX = e.clientX; panStartY = e.clientY;
     camStartX = camX; camStartY = camY;
@@ -607,6 +644,12 @@ canvas.addEventListener('pointerdown', (e) => {
 
   // Alt+click = eyedropper
   if (e.altKey) { eyedropAt(tile.col, tile.row); return; }
+
+  // Entry point placement mode
+  if (tool === 'entrypoint' && epBuilding) {
+    placeEntryPoint(epBuilding, tile.col, tile.row);
+    return;
+  }
 
   if (tool === 'fill') { floodFillAt(tile.col, tile.row); return; }
 
@@ -729,7 +772,9 @@ canvas.addEventListener('touchend', (e) => {
 // KEYBOARD SHORTCUTS
 // ============================================================================
 document.addEventListener('keydown', (e) => {
-  if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
+  if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  // Spacebar pan mode (Adobe XD / Figma style)
+  if (e.code === 'Space' && !e.repeat) { e.preventDefault(); spaceHeld = true; canvas.style.cursor = 'grab'; return; }
   if (e.ctrlKey && e.key === 'z') { e.preventDefault(); undo(); }
   else if (e.ctrlKey && e.key === 'y') { e.preventDefault(); redo(); }
   else if (e.key === 'b' || e.key === 'B') { tool = 'paint'; updateToolUI(); }
@@ -737,6 +782,10 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'f' || e.key === 'F') { tool = 'fill'; updateToolUI(); }
   else if (e.key === '[') { brushSize = Math.max(1, brushSize - 1); updateBrushSize(); }
   else if (e.key === ']') { brushSize = Math.min(10, brushSize + 1); updateBrushSize(); }
+  else if (e.key === 'Escape') { exitEntryPointMode(); }
+});
+document.addEventListener('keyup', (e) => {
+  if (e.code === 'Space') { spaceHeld = false; canvas.style.cursor = tool === 'entrypoint' ? 'cell' : 'crosshair'; }
 });
 
 // ============================================================================
@@ -832,6 +881,115 @@ for (const cat of CATEGORIES) {
 }
 
 // ============================================================================
+// ENTRY POINT PLACEMENT
+// ============================================================================
+function placeEntryPoint(buildingKey, col, row) {
+  if (!mapData) return;
+  if (!mapData.entryPoints) mapData.entryPoints = {};
+
+  // Record for undo
+  const oldEp = mapData.entryPoints[buildingKey] ? { ...mapData.entryPoints[buildingKey] } : null;
+  mapData.entryPoints[buildingKey] = { col, row, r: 8 };
+
+  // Also paint the entry point tile on the ground layer
+  const key = `${col},${row}`;
+  const tile = mapData.tiles[key] || (mapData.tiles[key] = {});
+  const beforeTile = { id: tile.id, ov: tile.ov };
+  tile.id = 'terrain_entry_point_cobble';
+  undoStack.push([{ key, before: beforeTile, after: { id: tile.id, ov: tile.ov }, epKey: buildingKey, epBefore: oldEp, epAfter: { col, row, r: 8 } }]);
+  if (undoStack.length > MAX_UNDO) undoStack.shift();
+  redoStack = [];
+
+  document.getElementById('ep-status').textContent = `${buildingKey} → (${col}, ${row})`;
+  render();
+  populateEpDropdown(); // refresh the dropdown
+}
+
+function exitEntryPointMode() {
+  epBuilding = null;
+  if (tool === 'entrypoint') { tool = 'paint'; }
+  canvas.style.cursor = 'crosshair';
+  updateToolUI();
+  document.getElementById('ep-status').textContent = '';
+}
+
+function populateEpDropdown() {
+  const $sel = document.getElementById('ep-select');
+  if (!$sel || !mapData) return;
+  const current = $sel.value;
+  $sel.innerHTML = '<option value="">-- Select Building --</option>';
+
+  const buildings = Object.keys(mapData.buildings || {}).sort();
+  const eps = mapData.entryPoints || {};
+
+  // Missing entry points first
+  const missing = buildings.filter(k => !eps[k]);
+  const set = buildings.filter(k => eps[k]);
+
+  if (missing.length > 0) {
+    const group = document.createElement('optgroup');
+    group.label = `Missing (${missing.length})`;
+    for (const k of missing) {
+      const opt = document.createElement('option');
+      opt.value = k; opt.textContent = k; opt.style.color = '#ff6666';
+      group.appendChild(opt);
+    }
+    $sel.appendChild(group);
+  }
+  if (set.length > 0) {
+    const group = document.createElement('optgroup');
+    group.label = `Set (${set.length})`;
+    for (const k of set) {
+      const ep = eps[k];
+      const opt = document.createElement('option');
+      opt.value = k; opt.textContent = `${k} (${ep.col},${ep.row})`;
+      group.appendChild(opt);
+    }
+    $sel.appendChild(group);
+  }
+  if (current) $sel.value = current;
+}
+
+// Entry point UI wiring
+document.getElementById('btn-ep-place')?.addEventListener('click', () => {
+  const key = document.getElementById('ep-select')?.value;
+  if (!key) { alert('Select a building first.'); return; }
+  epBuilding = key;
+  tool = 'entrypoint';
+  canvas.style.cursor = 'cell';
+  updateToolUI();
+  document.getElementById('ep-status').textContent = `Click to place entry point for: ${key}`;
+
+  // Pan to building if it exists
+  const bldg = mapData?.buildings?.[key];
+  if (bldg) {
+    camX = bldg.col * zoom - canvas.width / devicePixelRatio / 2;
+    camY = bldg.row * zoom - canvas.height / devicePixelRatio / 2;
+    render();
+  }
+});
+
+document.getElementById('btn-ep-clear')?.addEventListener('click', () => {
+  const key = document.getElementById('ep-select')?.value;
+  if (!key || !mapData?.entryPoints?.[key]) return;
+  delete mapData.entryPoints[key];
+  document.getElementById('ep-status').textContent = `Cleared entry point for ${key}`;
+  render();
+  populateEpDropdown();
+});
+
+document.getElementById('ep-select')?.addEventListener('change', () => {
+  const key = document.getElementById('ep-select').value;
+  // Pan to building when selected
+  if (key && mapData?.buildings?.[key]) {
+    const bldg = mapData.buildings[key];
+    camX = bldg.col * zoom - canvas.width / devicePixelRatio / 2;
+    camY = bldg.row * zoom - canvas.height / devicePixelRatio / 2;
+    render();
+  }
+});
+
+// ============================================================================
 // FILE OPERATIONS
 // ============================================================================
 function loadMapData(json) {
@@ -846,7 +1004,8 @@ function loadMapData(json) {
   camX = 160 * zoom - canvas.width / devicePixelRatio / 2;
   camY = 150 * zoom - canvas.height / devicePixelRatio / 2;
 
-  document.getElementById('hud-status').textContent = `Map loaded — ${Object.keys(mapData.tiles).length} tiles, v${mapData.version || '?'}`;
+  document.getElementById('hud-status').textContent = `Map loaded — ${Object.keys(mapData.tiles).length} tiles, ${Object.keys(mapData.buildings).length} buildings, v${mapData.version || '?'}`;
+  populateEpDropdown();
   render();
 }
 
@@ -916,6 +1075,25 @@ document.getElementById('btn-load-storage').addEventListener('click', () => {
     alert('No map found in browser storage. Use the IBC3React editor to save one first, or load a JSON file.');
   }
 });
+
+// Load from repository (GitHub Pages serves the maps/ folder)
+const REPO_BASE = (location.hostname === 'imaginebc.github.io') ? '/IBCMapEditor' : '';
+async function loadFromRepo(filename) {
+  const $status = document.getElementById('hud-status');
+  $status.textContent = `Loading ${filename} from repo...`;
+  try {
+    const resp = await fetch(`${REPO_BASE}/maps/${filename}`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const json = await resp.json();
+    loadMapData(json);
+    document.getElementById('load-modal').classList.remove('open');
+  } catch (e) {
+    alert(`Failed to load from repo: ${e.message}\n\nTry loading from a file instead.`);
+    $status.textContent = 'Load failed — use file import';
+  }
+}
+document.getElementById('btn-load-repo')?.addEventListener('click', () => loadFromRepo('imaginarium-map.json'));
+document.getElementById('btn-load-repo-backup')?.addEventListener('click', () => loadFromRepo('imaginarium-map-v1-backup.json'));
 
 // ============================================================================
 // STARTUP — Auto-load from localStorage or start empty
