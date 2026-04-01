@@ -1,0 +1,946 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>IBC Map Painter</title>
+<style>
+/* ===== Reset & Layout ===== */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: #111; font-family: 'Segoe UI', -apple-system, sans-serif; color: #e0e0e0; touch-action: none; }
+.app { display: flex; width: 100vw; height: 100vh; }
+
+/* ===== Canvas Area ===== */
+.canvas-area { flex: 1; position: relative; overflow: hidden; background: #0a1a0f; }
+#map-canvas { display: block; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+
+/* ===== HUD Overlays ===== */
+.hud { position: absolute; background: rgba(0,0,0,0.75); color: #0f8; font-family: 'Consolas', 'SF Mono', monospace; font-size: 12px; padding: 4px 10px; border-radius: 6px; pointer-events: none; z-index: 10; }
+.hud-top { top: 10px; left: 10px; }
+.hud-bottom { bottom: 10px; left: 10px; }
+.hud-brush { top: 10px; right: 330px; display: flex; align-items: center; gap: 8px; }
+.hud-brush .swatch { width: 20px; height: 20px; border: 1px solid #555; border-radius: 3px; }
+@media (max-width: 700px) { .hud-brush { right: 10px; top: 40px; } }
+
+/* ===== Sidebar ===== */
+.sidebar { width: 310px; min-width: 310px; background: #1a1a2e; display: flex; flex-direction: column; border-left: 2px solid #2a2a4a; overflow: hidden; z-index: 20; }
+@media (max-width: 700px) {
+  .sidebar { position: fixed; right: -310px; top: 0; bottom: 0; transition: right 0.3s ease; }
+  .sidebar.open { right: 0; }
+  .sidebar-toggle { display: block !important; }
+}
+.sidebar-toggle { display: none; position: fixed; top: 10px; right: 10px; z-index: 30; background: #f0c040; color: #111; border: none; width: 44px; height: 44px; border-radius: 8px; font-size: 20px; cursor: pointer; }
+
+/* Sidebar sections */
+.sidebar-header { padding: 10px 12px; font-size: 16px; font-weight: bold; color: #f0c040; border-bottom: 1px solid #333; flex-shrink: 0; }
+.section { padding: 8px 10px; border-top: 1px solid #2a2a4a; flex-shrink: 0; }
+.section-label { font-size: 10px; color: #777; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+
+/* Category tabs */
+.cat-tabs { display: flex; flex-wrap: wrap; gap: 2px; padding: 6px 8px; border-bottom: 1px solid #333; flex-shrink: 0; }
+.cat-tab { padding: 3px 8px; font-size: 11px; background: #252540; color: #aaa; border: 1px solid #333; border-radius: 4px; cursor: pointer; }
+.cat-tab:hover { background: #353550; }
+.cat-tab.active { background: #2a4a3a; color: #0f8; border-color: #0a6; }
+
+/* Tile palette */
+.palette { flex: 1; overflow-y: auto; padding: 6px; display: grid; grid-template-columns: repeat(auto-fill, minmax(48px, 1fr)); gap: 4px; align-content: start; }
+.palette .tile { width: 100%; aspect-ratio: 1; border: 2px solid #333; border-radius: 4px; cursor: pointer; display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; }
+.palette .tile:hover { border-color: #888; }
+.palette .tile.selected { border-color: #0f8; box-shadow: 0 0 6px #0f8; }
+.palette .tile .color-swatch { width: 100%; height: 100%; border-radius: 2px; }
+.palette .tile .label { position: absolute; bottom: 0; left: 0; right: 0; font-size: 7px; background: rgba(0,0,0,0.7); color: #ccc; text-align: center; padding: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Tools */
+.tools-row { display: flex; gap: 4px; flex-wrap: wrap; }
+.tool-btn { padding: 5px 10px; font-size: 12px; background: #252540; color: #ccc; border: 1px solid #444; border-radius: 4px; cursor: pointer; }
+.tool-btn:hover { background: #353560; }
+.tool-btn.active { background: #1a4a2a; color: #0f8; border-color: #0a6; }
+.action-btn { padding: 4px 10px; font-size: 11px; background: #252540; color: #ccc; border: 1px solid #444; border-radius: 4px; cursor: pointer; }
+.action-btn:hover { background: #353560; }
+
+/* Brush size */
+.brush-size-row { display: flex; align-items: center; gap: 8px; }
+.brush-size-row input[type=range] { flex: 1; accent-color: #0f8; }
+.brush-size-row .size-label { font-size: 12px; color: #0f8; min-width: 24px; text-align: center; }
+
+/* Keyboard hints */
+.hints { padding: 8px 10px; font-size: 10px; color: #555; line-height: 1.8; border-top: 1px solid #2a2a4a; flex-shrink: 0; }
+.hints kbd { background: #252540; padding: 1px 5px; border-radius: 3px; color: #aaa; font-size: 10px; }
+
+/* File modal */
+.modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 100; align-items: center; justify-content: center; }
+.modal-overlay.open { display: flex; }
+.modal-box { background: #1a1a2e; border: 1px solid #444; border-radius: 8px; padding: 20px; min-width: 320px; max-width: 500px; }
+.modal-box h3 { color: #f0c040; margin-bottom: 12px; }
+.modal-box textarea { width: 100%; height: 120px; background: #111; color: #ccc; border: 1px solid #444; border-radius: 4px; padding: 8px; font-family: monospace; font-size: 11px; resize: vertical; }
+.modal-box .btn-row { display: flex; gap: 8px; margin-top: 12px; }
+.modal-box button { padding: 6px 16px; border-radius: 4px; border: 1px solid #444; cursor: pointer; font-size: 12px; }
+.modal-box .btn-primary { background: #f0c040; color: #111; border-color: #f0c040; font-weight: bold; }
+.modal-box .btn-cancel { background: #333; color: #ccc; }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- Canvas Area -->
+  <div class="canvas-area">
+    <canvas id="map-canvas"></canvas>
+    <div class="hud hud-top" id="hud-status">IBC Map Painter — Loading...</div>
+    <div class="hud hud-bottom" id="hud-coords">Tile: —  |  Zoom: 100%</div>
+    <div class="hud hud-brush" id="hud-brush"><div class="swatch" id="brush-swatch"></div><span id="brush-name">—</span></div>
+  </div>
+
+  <!-- Sidebar Toggle (mobile) -->
+  <button class="sidebar-toggle" id="sidebar-toggle">☰</button>
+
+  <!-- Sidebar -->
+  <div class="sidebar" id="sidebar">
+    <div class="sidebar-header">🎨 Map Painter</div>
+
+    <div class="cat-tabs" id="cat-tabs"></div>
+
+    <div class="palette" id="palette"></div>
+
+    <div class="section">
+      <div class="section-label">Tools</div>
+      <div class="tools-row">
+        <button class="tool-btn active" data-tool="paint">Paint</button>
+        <button class="tool-btn" data-tool="erase">Erase</button>
+        <button class="tool-btn" data-tool="fill">Fill</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Brush Size</div>
+      <div class="brush-size-row">
+        <input type="range" id="brush-size" min="1" max="10" value="1">
+        <span class="size-label" id="brush-size-label">1</span>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Layers</div>
+      <div class="tools-row">
+        <button class="tool-btn active" data-layer="ground" id="btn-layer-ground">Ground</button>
+        <button class="tool-btn" data-layer="overlay" id="btn-layer-overlay">Overlay</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">History</div>
+      <div class="tools-row">
+        <button class="action-btn" id="btn-undo">Undo</button>
+        <button class="action-btn" id="btn-redo">Redo</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">File</div>
+      <div class="tools-row">
+        <button class="action-btn" id="btn-load">Load Map</button>
+        <button class="action-btn" id="btn-save">Save to Browser</button>
+        <button class="action-btn" id="btn-export">Export JSON</button>
+      </div>
+    </div>
+
+    <div class="hints">
+      <kbd>B</kbd> Paint &nbsp; <kbd>E</kbd> Erase &nbsp; <kbd>F</kbd> Fill<br>
+      <kbd>Alt+Click</kbd> Eyedropper &nbsp; <kbd>[</kbd><kbd>]</kbd> Brush size<br>
+      <kbd>Ctrl+Z</kbd> Undo &nbsp; <kbd>Ctrl+Y</kbd> Redo<br>
+      Scroll = zoom &nbsp; Middle/2-finger = pan
+    </div>
+  </div>
+</div>
+
+<!-- Load Map Modal -->
+<div class="modal-overlay" id="load-modal">
+  <div class="modal-box">
+    <h3>Load Map JSON</h3>
+    <p style="font-size:12px;color:#888;margin-bottom:8px;">Paste map JSON, pick a file, or load from browser storage.</p>
+    <textarea id="load-textarea" placeholder="Paste imaginarium-map.json contents here..."></textarea>
+    <div class="btn-row">
+      <button class="btn-primary" id="btn-load-paste">Load Pasted</button>
+      <label class="btn-primary" style="padding:6px 16px;border-radius:4px;cursor:pointer;font-size:12px;">Browse... <input type="file" accept=".json" id="btn-load-file" style="display:none"></label>
+      <button class="action-btn" id="btn-load-storage">From Browser</button>
+      <button class="btn-cancel" id="btn-load-cancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================================
+// IBC MAP PAINTER — 2D Top-Down Map Editor
+// Standalone Canvas2D app with touch/stylus/Apple Pencil support.
+// Shares map data with IBC3React editors via identical JSON format.
+// ============================================================================
+
+// --- Color mapping: tile ID → display color ---
+const TILE_COLORS = {
+  // Grass family
+  'terrain_grass_067':         '#5a8a3a',
+  'terrain_grass_067_Bright':  '#6a9a4a',
+  'terrain_grass_067_C':       '#4a7a2a',
+  'terrain_grass_067_NB':      '#508030',
+  'terrain_grass_067_NB2':     '#4d7d2d',
+  'terrain_grass_nature':      '#3a6a2a',
+  'terrain_grass_pond':        '#4a8050',
+  // Water
+  'terrain_water_pure':        '#3a7abf',
+  'terrain_water_pure_dark':   '#2a5a9f',
+  // Roads
+  'terrain_dirt_path_083':     '#b89a6a',
+  'terrain_dirt_path_083_dark':'#a08050',
+  'terrain_grassy_path':       '#7a9a5a',
+  // Cobblestone
+  'terrain_cobblestone_gray':  '#8a8a8a',
+  'terrain_cobblestone_warm':  '#a09070',
+  // Entry point
+  'terrain_entry_point_cobble':'#e0b030',
+  'terrain_entry_point_gold':  '#f0c040',
+  // Shore tiles
+  'terrain_shore_N':           '#c0b080', 'terrain_shore_S': '#c0b080',
+  'terrain_shore_E':           '#c0b080', 'terrain_shore_W': '#c0b080',
+  'terrain_shore_NE':          '#c0b080', 'terrain_shore_NW': '#c0b080',
+  'terrain_shore_SE':          '#c0b080', 'terrain_shore_SW': '#c0b080',
+};
+
+// Overlay colors (drawn as dots on top of ground)
+const OVERLAY_COLORS = {
+  'tree_round':     '#2a5a1a', 'tree_tall':     '#1a4a1a', 'tree_cypress': '#1a5a2a',
+  'tree_pine':      '#1a4a0a', 'tree_medieval': '#2a4a1a',
+  'tree_pine_huge': '#0a3a0a', 'tree_pine_lg':  '#1a3a0a', 'tree_pine_sm': '#2a5a1a',
+  'tree_dead_lg':   '#5a4a3a', 'tree_dead_sm':  '#6a5a4a',
+  'rock': '#6a6a6a', 'grassy_stone_lg': '#7a7a6a', 'grassy_stone_sm': '#8a8a7a', 'grassy_stump': '#6a5a3a',
+  // Decor
+  'decor_signpost': '#8a6a3a', 'decor_bench': '#7a5a3a', 'decor_fountain': '#5a9abf',
+  'decor_street_lamp': '#e0d060', 'decor_street_lamp_off': '#8a8a6a',
+  'decor_map_kiosk': '#8a7a5a', 'decor_gate_archway': '#7a6a5a',
+  'decor_garden_plot': '#4a8a3a', 'decor_playground_swings': '#c06030',
+  'decor_playground_slide': '#d07040', 'decor_lily_pads': '#3a8a4a', 'decor_ducks': '#e0c040',
+  // Landmarks
+  'landmark_clock_tower': '#8a5a3a', 'landmark_lighthouse': '#d0d0d0', 'landmark_statue': '#a0a0a0',
+};
+
+// Fallback color resolver
+function tileColor(id) {
+  if (!id) return '#333';
+  if (TILE_COLORS[id]) return TILE_COLORS[id];
+  // Pattern matching
+  if (id.includes('grass')) return '#5a8a3a';
+  if (id.includes('water')) return '#3a7abf';
+  if (id.includes('dirt') || id.includes('path')) return '#b89a6a';
+  if (id.includes('cobble')) return '#8a8a8a';
+  if (id.includes('entry') || id.includes('gold')) return '#e0b030';
+  if (id.includes('shore')) return '#c0b080';
+  if (id.includes('road') || id.includes('plaza')) return '#9a8a7a';
+  if (id.includes('bridge')) return '#8a7a5a';
+  return '#555';
+}
+
+function overlayColor(id) {
+  if (!id) return null;
+  if (OVERLAY_COLORS[id]) return OVERLAY_COLORS[id];
+  if (id.includes('tree')) return '#2a5a1a';
+  if (id.includes('rock') || id.includes('stone')) return '#7a7a6a';
+  if (id.includes('decor')) return '#8a6a3a';
+  if (id.includes('landmark')) return '#8a5a3a';
+  return '#5a5a5a';
+}
+
+// --- Tile catalog for the palette ---
+// Ground tiles
+const GROUND_TILES = [
+  { id: 'terrain_grass_067', name: 'Grass', cat: 'grass' },
+  { id: 'terrain_grass_067_Bright', name: 'Grass Bright', cat: 'grass' },
+  { id: 'terrain_grass_067_C', name: 'Grass Dark Tuft', cat: 'grass' },
+  { id: 'terrain_grass_067_NB', name: 'Grass Muted', cat: 'grass' },
+  { id: 'terrain_grass_067_NB2', name: 'Grass Muted 2', cat: 'grass' },
+  { id: 'terrain_grass_nature', name: 'Grass Nature', cat: 'grass' },
+  { id: 'terrain_water_pure', name: 'Water', cat: 'water' },
+  { id: 'terrain_water_pure_dark', name: 'Water Dark', cat: 'water' },
+  { id: 'terrain_dirt_path_083', name: 'Dirt Path', cat: 'road' },
+  { id: 'terrain_cobblestone_gray', name: 'Cobblestone', cat: 'road' },
+  { id: 'terrain_cobblestone_warm', name: 'Warm Cobblestone', cat: 'road' },
+  { id: 'terrain_entry_point_cobble', name: 'Entry Point', cat: 'special' },
+  { id: 'terrain_grassy_path', name: 'Grassy Path', cat: 'road' },
+  { id: 'terrain_shore_N', name: 'Shore N', cat: 'shore' },
+  { id: 'terrain_shore_S', name: 'Shore S', cat: 'shore' },
+  { id: 'terrain_shore_E', name: 'Shore E', cat: 'shore' },
+  { id: 'terrain_shore_W', name: 'Shore W', cat: 'shore' },
+];
+
+// Overlay tiles
+const OVERLAY_TILES = [
+  { id: 'tree_round', name: 'Round Tree', cat: 'tree' },
+  { id: 'tree_tall', name: 'Tall Tree', cat: 'tree' },
+  { id: 'tree_cypress', name: 'Cypress', cat: 'tree' },
+  { id: 'tree_pine', name: 'Pine', cat: 'tree' },
+  { id: 'tree_medieval', name: 'Medieval Tree', cat: 'tree' },
+  { id: 'rock', name: 'Rock', cat: 'nature' },
+  { id: 'grassy_stone_lg', name: 'Stone Large', cat: 'nature' },
+  { id: 'grassy_stone_sm', name: 'Stone Small', cat: 'nature' },
+  { id: 'grassy_stump', name: 'Stump', cat: 'nature' },
+  { id: 'decor_signpost', name: 'Signpost', cat: 'decor' },
+  { id: 'decor_bench', name: 'Bench', cat: 'decor' },
+  { id: 'decor_fountain', name: 'Fountain', cat: 'decor' },
+  { id: 'decor_street_lamp', name: 'Street Lamp', cat: 'decor' },
+  { id: 'decor_map_kiosk', name: 'Map Kiosk', cat: 'decor' },
+  { id: 'decor_gate_archway', name: 'Gate Archway', cat: 'decor' },
+  { id: 'decor_garden_plot', name: 'Garden Plot', cat: 'decor' },
+  { id: 'decor_lily_pads', name: 'Lily Pads', cat: 'decor' },
+  { id: 'decor_ducks', name: 'Ducks', cat: 'decor' },
+  { id: 'landmark_clock_tower', name: 'Clock Tower', cat: 'landmark' },
+  { id: 'landmark_lighthouse', name: 'Lighthouse', cat: 'landmark' },
+  { id: 'landmark_statue', name: 'Statue', cat: 'landmark' },
+];
+
+const CATEGORIES = [
+  { key: 'all', label: 'All' },
+  { key: 'grass', label: 'Grass' },
+  { key: 'water', label: 'Water' },
+  { key: 'road', label: 'Roads' },
+  { key: 'shore', label: 'Shore' },
+  { key: 'special', label: 'Special' },
+  { key: 'tree', label: 'Trees' },
+  { key: 'nature', label: 'Nature' },
+  { key: 'decor', label: 'Decor' },
+  { key: 'landmark', label: 'Landmark' },
+];
+
+// ============================================================================
+// APP STATE
+// ============================================================================
+const MAP_COLS = 320, MAP_ROWS = 300;
+const STORAGE_KEY = 'imaginarium-map-editor';
+
+let mapData = null; // { version, cols, rows, tiles: { "col,row": { id, ov, ... } }, buildings, entryPoints }
+let tool = 'paint';
+let activeLayer = 'ground'; // 'ground' or 'overlay'
+let selectedTileId = 'terrain_grass_067';
+let brushSize = 1;
+let activeCat = 'all';
+
+// Camera
+let camX = 0, camY = 0, zoom = 4; // each tile = zoom pixels
+const MIN_ZOOM = 1, MAX_ZOOM = 20;
+
+// Undo
+let undoStack = [], redoStack = [];
+const MAX_UNDO = 80;
+
+// Pointer tracking
+let isPainting = false;
+let isPanning = false;
+let panStartX = 0, panStartY = 0, camStartX = 0, camStartY = 0;
+let lastPaintedTile = null;
+let strokeChanges = [];
+
+// Pinch zoom
+let pinchDist = 0;
+let pinchMid = { x: 0, y: 0 };
+
+// ============================================================================
+// CANVAS SETUP
+// ============================================================================
+const canvas = document.getElementById('map-canvas');
+const ctx = canvas.getContext('2d');
+
+function resizeCanvas() {
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width * devicePixelRatio;
+  canvas.height = rect.height * devicePixelRatio;
+  ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+  render();
+}
+window.addEventListener('resize', resizeCanvas);
+
+// ============================================================================
+// RENDERING
+// ============================================================================
+function render() {
+  if (!mapData) return;
+  const w = canvas.width / devicePixelRatio;
+  const h = canvas.height / devicePixelRatio;
+
+  ctx.fillStyle = '#0a1a0f';
+  ctx.fillRect(0, 0, w, h);
+
+  const tileSize = zoom;
+
+  // Visible tile range
+  const startCol = Math.max(0, Math.floor(camX / tileSize));
+  const startRow = Math.max(0, Math.floor(camY / tileSize));
+  const endCol = Math.min(MAP_COLS - 1, Math.ceil((camX + w) / tileSize));
+  const endRow = Math.min(MAP_ROWS - 1, Math.ceil((camY + h) / tileSize));
+
+  // Draw ground tiles
+  for (let row = startRow; row <= endRow; row++) {
+    for (let col = startCol; col <= endCol; col++) {
+      const x = col * tileSize - camX;
+      const y = row * tileSize - camY;
+      const key = `${col},${row}`;
+      const tile = mapData.tiles[key];
+
+      // Ground
+      ctx.fillStyle = tile ? tileColor(tile.id) : '#333';
+      ctx.fillRect(x, y, tileSize, tileSize);
+
+      // Overlay dot
+      if (tile && tile.ov) {
+        const oc = overlayColor(tile.ov);
+        if (oc) {
+          ctx.fillStyle = oc;
+          const dotSize = Math.max(2, tileSize * 0.5);
+          const offset = (tileSize - dotSize) / 2;
+          ctx.beginPath();
+          ctx.arc(x + tileSize / 2, y + tileSize / 2, dotSize / 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      // Grid lines (only at reasonable zoom)
+      if (tileSize >= 6) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+        ctx.strokeRect(x, y, tileSize, tileSize);
+      }
+    }
+  }
+
+  // Draw buildings as labeled rectangles
+  if (mapData.buildings && zoom >= 3) {
+    ctx.font = `${Math.max(8, zoom * 0.8)}px 'Segoe UI', sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const [key, bldg] of Object.entries(mapData.buildings)) {
+      const bx = bldg.col * tileSize - camX;
+      const by = bldg.row * tileSize - camY;
+      const size = tileSize * 3;
+      ctx.fillStyle = 'rgba(200, 60, 60, 0.35)';
+      ctx.fillRect(bx - size / 2, by - size / 2, size, size);
+      ctx.strokeStyle = '#c44';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bx - size / 2, by - size / 2, size, size);
+      if (zoom >= 5) {
+        ctx.fillStyle = '#fff';
+        const label = key.length > 14 ? key.slice(0, 12) + '..' : key;
+        ctx.fillText(label, bx, by);
+      }
+    }
+  }
+
+  // Draw entry points
+  if (mapData.entryPoints && zoom >= 4) {
+    for (const [key, ep] of Object.entries(mapData.entryPoints)) {
+      const ex = ep.col * tileSize - camX + tileSize / 2;
+      const ey = ep.row * tileSize - camY + tileSize / 2;
+      ctx.fillStyle = '#f0c040';
+      ctx.beginPath();
+      ctx.arc(ex, ey, Math.max(2, tileSize * 0.3), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // Brush preview
+  if (lastHoverTile) {
+    const bx = lastHoverTile.col * tileSize - camX;
+    const by = lastHoverTile.row * tileSize - camY;
+    const bSize = tileSize * brushSize;
+    ctx.strokeStyle = 'rgba(0, 255, 136, 0.7)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(bx, by, bSize, bSize);
+  }
+
+  // Update HUD
+  updateHUD();
+}
+
+let lastHoverTile = null;
+
+function updateHUD() {
+  const tile = lastHoverTile;
+  const coordStr = tile ? `Tile: (${tile.col}, ${tile.row})` : 'Tile: —';
+  document.getElementById('hud-coords').textContent = `${coordStr}  |  Zoom: ${zoom.toFixed(1)}x`;
+}
+
+// ============================================================================
+// POINTER → TILE COORDINATE
+// ============================================================================
+function pointerToTile(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  const x = clientX - rect.left + camX;
+  const y = clientY - rect.top + camY;
+  const col = Math.floor(x / zoom);
+  const row = Math.floor(y / zoom);
+  if (col < 0 || col >= MAP_COLS || row < 0 || row >= MAP_ROWS) return null;
+  return { col, row };
+}
+
+// ============================================================================
+// PAINTING
+// ============================================================================
+function paintAt(col, row) {
+  for (let dc = 0; dc < brushSize; dc++) {
+    for (let dr = 0; dr < brushSize; dr++) {
+      const c = col + dc, r = row + dr;
+      if (c < 0 || c >= MAP_COLS || r < 0 || r >= MAP_ROWS) continue;
+      const key = `${c},${r}`;
+      const tile = mapData.tiles[key] || (mapData.tiles[key] = {});
+      const before = { id: tile.id, ov: tile.ov };
+
+      if (tool === 'erase') {
+        if (activeLayer === 'overlay') { tile.ov = undefined; }
+        else { tile.id = undefined; tile.ov = undefined; }
+      } else if (tool === 'paint') {
+        if (activeLayer === 'overlay') { tile.ov = selectedTileId; }
+        else { tile.id = selectedTileId; }
+      }
+
+      const after = { id: tile.id, ov: tile.ov };
+      if (before.id !== after.id || before.ov !== after.ov) {
+        strokeChanges.push({ key, before, after });
+      }
+    }
+  }
+  render();
+}
+
+function floodFillAt(col, row) {
+  const key = `${col},${row}`;
+  const tile = mapData.tiles[key];
+  const targetId = activeLayer === 'overlay' ? (tile?.ov || null) : (tile?.id || null);
+  const fillId = selectedTileId;
+  if (targetId === fillId) return;
+
+  const changes = [];
+  const visited = new Set();
+  const queue = [{ col, row }];
+
+  while (queue.length > 0) {
+    const { col: c, row: r } = queue.shift();
+    const k = `${c},${r}`;
+    if (visited.has(k)) continue;
+    if (c < 0 || c >= MAP_COLS || r < 0 || r >= MAP_ROWS) continue;
+    visited.add(k);
+
+    const t = mapData.tiles[k] || (mapData.tiles[k] = {});
+    const currentId = activeLayer === 'overlay' ? (t.ov || null) : (t.id || null);
+    if (currentId !== targetId) continue;
+
+    const before = { id: t.id, ov: t.ov };
+    if (activeLayer === 'overlay') t.ov = fillId;
+    else t.id = fillId;
+    const after = { id: t.id, ov: t.ov };
+    changes.push({ key: k, before, after });
+
+    queue.push({ col: c - 1, row: r }, { col: c + 1, row: r }, { col: c, row: r - 1 }, { col: c, row: r + 1 });
+  }
+
+  if (changes.length > 0) {
+    undoStack.push(changes);
+    if (undoStack.length > MAX_UNDO) undoStack.shift();
+    redoStack = [];
+  }
+  render();
+}
+
+function eyedropAt(col, row) {
+  const key = `${col},${row}`;
+  const tile = mapData.tiles[key];
+  if (!tile) return;
+  if (activeLayer === 'overlay' && tile.ov) {
+    selectedTileId = tile.ov;
+  } else if (tile.id) {
+    selectedTileId = tile.id;
+  }
+  tool = 'paint';
+  updateToolUI();
+  renderPalette();
+  updateBrushHUD();
+}
+
+// ============================================================================
+// UNDO / REDO
+// ============================================================================
+function undo() {
+  if (undoStack.length === 0) return;
+  const changes = undoStack.pop();
+  for (const ch of changes) {
+    const tile = mapData.tiles[ch.key] || (mapData.tiles[ch.key] = {});
+    tile.id = ch.before.id;
+    tile.ov = ch.before.ov;
+  }
+  redoStack.push(changes);
+  render();
+}
+
+function redo() {
+  if (redoStack.length === 0) return;
+  const changes = redoStack.pop();
+  for (const ch of changes) {
+    const tile = mapData.tiles[ch.key] || (mapData.tiles[ch.key] = {});
+    tile.id = ch.after.id;
+    tile.ov = ch.after.ov;
+  }
+  undoStack.push(changes);
+  render();
+}
+
+// ============================================================================
+// POINTER EVENTS (mouse + touch + stylus)
+// ============================================================================
+canvas.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  const tile = pointerToTile(e.clientX, e.clientY);
+
+  // Middle button or two-finger → pan
+  if (e.button === 1 || (e.pointerType === 'touch' && e.isPrimary === false)) {
+    isPanning = true;
+    panStartX = e.clientX; panStartY = e.clientY;
+    camStartX = camX; camStartY = camY;
+    canvas.setPointerCapture(e.pointerId);
+    return;
+  }
+
+  if (e.button !== 0) return;
+  if (!tile) return;
+
+  // Alt+click = eyedropper
+  if (e.altKey) { eyedropAt(tile.col, tile.row); return; }
+
+  if (tool === 'fill') { floodFillAt(tile.col, tile.row); return; }
+
+  // Start painting
+  isPainting = true;
+  strokeChanges = [];
+  lastPaintedTile = `${tile.col},${tile.row}`;
+  paintAt(tile.col, tile.row);
+  canvas.setPointerCapture(e.pointerId);
+});
+
+canvas.addEventListener('pointermove', (e) => {
+  e.preventDefault();
+  const tile = pointerToTile(e.clientX, e.clientY);
+  lastHoverTile = tile;
+
+  if (isPanning) {
+    camX = camStartX - (e.clientX - panStartX);
+    camY = camStartY - (e.clientY - panStartY);
+    render();
+    return;
+  }
+
+  if (isPainting && tile) {
+    const tileKey = `${tile.col},${tile.row}`;
+    if (tileKey !== lastPaintedTile) {
+      lastPaintedTile = tileKey;
+      paintAt(tile.col, tile.row);
+    }
+  } else {
+    render(); // update brush preview
+  }
+});
+
+canvas.addEventListener('pointerup', (e) => {
+  e.preventDefault();
+  if (isPanning) { isPanning = false; return; }
+  if (isPainting) {
+    isPainting = false;
+    if (strokeChanges.length > 0) {
+      undoStack.push([...strokeChanges]);
+      if (undoStack.length > MAX_UNDO) undoStack.shift();
+      redoStack = [];
+    }
+    strokeChanges = [];
+  }
+});
+
+canvas.addEventListener('pointercancel', () => { isPainting = false; isPanning = false; });
+
+// ============================================================================
+// ZOOM (scroll + pinch)
+// ============================================================================
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+
+  // World position under cursor before zoom
+  const wx = (camX + mx) / zoom;
+  const wy = (camY + my) / zoom;
+
+  // Apply zoom
+  const delta = e.deltaY > 0 ? -1 : 1;
+  zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom + delta * 0.5));
+
+  // Adjust camera so cursor stays on same world position
+  camX = wx * zoom - mx;
+  camY = wy * zoom - my;
+  render();
+}, { passive: false });
+
+// Touch pinch-to-zoom
+let activeTouches = new Map();
+canvas.addEventListener('touchstart', (e) => {
+  for (const t of e.changedTouches) activeTouches.set(t.identifier, { x: t.clientX, y: t.clientY });
+  if (activeTouches.size === 2) {
+    const pts = [...activeTouches.values()];
+    pinchDist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+    pinchMid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+    isPainting = false; // cancel paint on second finger
+  }
+}, { passive: true });
+
+canvas.addEventListener('touchmove', (e) => {
+  for (const t of e.changedTouches) activeTouches.set(t.identifier, { x: t.clientX, y: t.clientY });
+  if (activeTouches.size === 2) {
+    e.preventDefault();
+    const pts = [...activeTouches.values()];
+    const newDist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+    const newMid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+
+    // Zoom
+    const rect = canvas.getBoundingClientRect();
+    const mx = pinchMid.x - rect.left;
+    const my = pinchMid.y - rect.top;
+    const wx = (camX + mx) / zoom;
+    const wy = (camY + my) / zoom;
+    const scale = newDist / pinchDist;
+    zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom * scale));
+    camX = wx * zoom - mx;
+    camY = wy * zoom - my;
+
+    // Pan
+    camX -= (newMid.x - pinchMid.x);
+    camY -= (newMid.y - pinchMid.y);
+
+    pinchDist = newDist;
+    pinchMid = newMid;
+    render();
+  }
+}, { passive: false });
+
+canvas.addEventListener('touchend', (e) => {
+  for (const t of e.changedTouches) activeTouches.delete(t.identifier);
+}, { passive: true });
+
+// ============================================================================
+// KEYBOARD SHORTCUTS
+// ============================================================================
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
+  if (e.ctrlKey && e.key === 'z') { e.preventDefault(); undo(); }
+  else if (e.ctrlKey && e.key === 'y') { e.preventDefault(); redo(); }
+  else if (e.key === 'b' || e.key === 'B') { tool = 'paint'; updateToolUI(); }
+  else if (e.key === 'e' || e.key === 'E') { tool = 'erase'; updateToolUI(); }
+  else if (e.key === 'f' || e.key === 'F') { tool = 'fill'; updateToolUI(); }
+  else if (e.key === '[') { brushSize = Math.max(1, brushSize - 1); updateBrushSize(); }
+  else if (e.key === ']') { brushSize = Math.min(10, brushSize + 1); updateBrushSize(); }
+});
+
+// ============================================================================
+// UI WIRING
+// ============================================================================
+function updateToolUI() {
+  document.querySelectorAll('.tool-btn[data-tool]').forEach(b => {
+    b.classList.toggle('active', b.dataset.tool === tool);
+  });
+}
+
+function updateBrushSize() {
+  document.getElementById('brush-size').value = brushSize;
+  document.getElementById('brush-size-label').textContent = brushSize;
+}
+
+function updateBrushHUD() {
+  const swatch = document.getElementById('brush-swatch');
+  const name = document.getElementById('brush-name');
+  const isOv = OVERLAY_COLORS[selectedTileId];
+  swatch.style.background = isOv ? overlayColor(selectedTileId) : tileColor(selectedTileId);
+  name.textContent = selectedTileId.replace('terrain_', '').replace('decor_', '').replace('landmark_', '');
+}
+
+// Tool buttons
+document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
+  btn.addEventListener('click', () => { tool = btn.dataset.tool; updateToolUI(); });
+});
+
+// Layer toggle
+document.getElementById('btn-layer-ground').addEventListener('click', () => {
+  activeLayer = 'ground'; renderPalette();
+  document.getElementById('btn-layer-ground').classList.add('active');
+  document.getElementById('btn-layer-overlay').classList.remove('active');
+});
+document.getElementById('btn-layer-overlay').addEventListener('click', () => {
+  activeLayer = 'overlay'; renderPalette();
+  document.getElementById('btn-layer-overlay').classList.add('active');
+  document.getElementById('btn-layer-ground').classList.remove('active');
+});
+
+// Brush size
+document.getElementById('brush-size').addEventListener('input', (e) => {
+  brushSize = parseInt(e.target.value);
+  document.getElementById('brush-size-label').textContent = brushSize;
+});
+
+// Undo/redo
+document.getElementById('btn-undo').addEventListener('click', undo);
+document.getElementById('btn-redo').addEventListener('click', redo);
+
+// Sidebar toggle (mobile)
+document.getElementById('sidebar-toggle').addEventListener('click', () => {
+  document.getElementById('sidebar').classList.toggle('open');
+});
+
+// ============================================================================
+// PALETTE RENDERING
+// ============================================================================
+function renderPalette() {
+  const tiles = activeLayer === 'overlay' ? OVERLAY_TILES : GROUND_TILES;
+  const filtered = activeCat === 'all' ? tiles : tiles.filter(t => t.cat === activeCat);
+  const $pal = document.getElementById('palette');
+  $pal.innerHTML = '';
+
+  for (const t of filtered) {
+    const el = document.createElement('div');
+    el.className = 'tile' + (t.id === selectedTileId ? ' selected' : '');
+    const color = activeLayer === 'overlay' ? overlayColor(t.id) : tileColor(t.id);
+    el.innerHTML = `<div class="color-swatch" style="background:${color}"></div><div class="label">${t.name}</div>`;
+    el.addEventListener('click', () => {
+      selectedTileId = t.id;
+      renderPalette();
+      updateBrushHUD();
+    });
+    $pal.appendChild(el);
+  }
+}
+
+// Category tabs
+const $tabs = document.getElementById('cat-tabs');
+for (const cat of CATEGORIES) {
+  const tab = document.createElement('div');
+  tab.className = 'cat-tab' + (cat.key === activeCat ? ' active' : '');
+  tab.textContent = cat.label;
+  tab.addEventListener('click', () => {
+    activeCat = cat.key;
+    document.querySelectorAll('.cat-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    renderPalette();
+  });
+  $tabs.appendChild(tab);
+}
+
+// ============================================================================
+// FILE OPERATIONS
+// ============================================================================
+function loadMapData(json) {
+  mapData = json;
+  if (!mapData.tiles) mapData.tiles = {};
+  if (!mapData.buildings) mapData.buildings = {};
+  if (!mapData.entryPoints) mapData.entryPoints = {};
+  undoStack = [];
+  redoStack = [];
+
+  // Center camera on town center
+  camX = 160 * zoom - canvas.width / devicePixelRatio / 2;
+  camY = 150 * zoom - canvas.height / devicePixelRatio / 2;
+
+  document.getElementById('hud-status').textContent = `Map loaded — ${Object.keys(mapData.tiles).length} tiles, v${mapData.version || '?'}`;
+  render();
+}
+
+function createEmptyMap() {
+  return { version: 13, cols: MAP_COLS, rows: MAP_ROWS, tileW: 132, tileH: 66, tiles: {}, buildings: {}, entryPoints: {}, tileCount: 0 };
+}
+
+// Save to localStorage (same key as IBC3React editor)
+document.getElementById('btn-save').addEventListener('click', () => {
+  if (!mapData) return;
+  mapData.tileCount = Object.keys(mapData.tiles).length;
+  mapData.modified = new Date().toISOString();
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(mapData));
+  document.getElementById('hud-status').textContent = 'Saved to browser storage!';
+  setTimeout(() => { document.getElementById('hud-status').textContent = 'IBC Map Painter'; }, 2000);
+});
+
+// Export as downloadable JSON
+document.getElementById('btn-export').addEventListener('click', () => {
+  if (!mapData) return;
+  mapData.tileCount = Object.keys(mapData.tiles).length;
+  mapData.modified = new Date().toISOString();
+  const blob = new Blob([JSON.stringify(mapData)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'imaginarium-map.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  document.getElementById('hud-status').textContent = 'Exported imaginarium-map.json!';
+});
+
+// Load modal
+document.getElementById('btn-load').addEventListener('click', () => {
+  document.getElementById('load-modal').classList.add('open');
+});
+document.getElementById('btn-load-cancel').addEventListener('click', () => {
+  document.getElementById('load-modal').classList.remove('open');
+});
+document.getElementById('btn-load-paste').addEventListener('click', () => {
+  const text = document.getElementById('load-textarea').value.trim();
+  if (!text) return;
+  try {
+    loadMapData(JSON.parse(text));
+    document.getElementById('load-modal').classList.remove('open');
+  } catch (e) { alert('Invalid JSON: ' + e.message); }
+});
+document.getElementById('btn-load-file').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      loadMapData(JSON.parse(reader.result));
+      document.getElementById('load-modal').classList.remove('open');
+    } catch (err) { alert('Invalid JSON: ' + err.message); }
+  };
+  reader.readAsText(file);
+});
+document.getElementById('btn-load-storage').addEventListener('click', () => {
+  const stored = localStorage.getItem(STORAGE_KEY);
+  if (stored) {
+    try {
+      loadMapData(JSON.parse(stored));
+      document.getElementById('load-modal').classList.remove('open');
+    } catch (e) { alert('Corrupted storage data: ' + e.message); }
+  } else {
+    alert('No map found in browser storage. Use the IBC3React editor to save one first, or load a JSON file.');
+  }
+});
+
+// ============================================================================
+// STARTUP — Auto-load from localStorage or start empty
+// ============================================================================
+function init() {
+  resizeCanvas();
+  renderPalette();
+  updateBrushHUD();
+
+  // Try auto-load from localStorage
+  const stored = localStorage.getItem(STORAGE_KEY);
+  if (stored) {
+    try {
+      loadMapData(JSON.parse(stored));
+      document.getElementById('hud-status').textContent = 'Map loaded from browser storage';
+      return;
+    } catch (e) { console.warn('Failed to load from storage:', e); }
+  }
+
+  // Empty map
+  loadMapData(createEmptyMap());
+  document.getElementById('hud-status').textContent = 'IBC Map Painter — No map in storage. Use Load to import.';
+}
+
+init();
+</script>
+</body>
+</html>
