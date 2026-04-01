@@ -176,6 +176,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #111; font
       <div class="section-label" style="margin-bottom:4px;">From Repository</div>
       <div class="btn-row">
         <button class="btn-primary" id="btn-load-repo">Current Map (v13)</button>
+        <button class="action-btn" id="btn-load-repo-noroads">No Roads (base)</button>
         <button class="action-btn" id="btn-load-repo-backup">v1 Backup (120x100)</button>
       </div>
     </div>
@@ -393,8 +394,93 @@ function resizeCanvas() {
 window.addEventListener('resize', resizeCanvas);
 
 // ============================================================================
-// RENDERING
+// RENDERING — Offscreen bitmap buffer for performance
+// The map is pre-rendered to a 1-pixel-per-tile bitmap (320×300 px).
+// The main render() just scales that bitmap to the viewport with camera offset.
+// Painting updates only the dirty tiles on the bitmap — no per-frame tile loop.
 // ============================================================================
+let mapBitmap = null;    // OffscreenCanvas or regular Canvas (320×300)
+let bitmapCtx = null;
+let bitmapData = null;   // ImageData for direct pixel manipulation
+
+function initBitmap() {
+  mapBitmap = document.createElement('canvas');
+  mapBitmap.width = MAP_COLS;
+  mapBitmap.height = MAP_ROWS;
+  bitmapCtx = mapBitmap.getContext('2d');
+  bitmapData = bitmapCtx.createImageData(MAP_COLS, MAP_ROWS);
+}
+
+/** Parse a hex color string to [r, g, b] */
+function hexToRgb(hex) {
+  const h = hex.replace('#', '');
+  return [parseInt(h.substring(0, 2), 16), parseInt(h.substring(2, 4), 16), parseInt(h.substring(4, 6), 16)];
+}
+
+// Cache parsed colors for speed
+const colorCache = {};
+function getCachedRgb(hex) {
+  if (!colorCache[hex]) colorCache[hex] = hexToRgb(hex);
+  return colorCache[hex];
+}
+
+/** Rebuild the entire bitmap from map data */
+function rebuildBitmap() {
+  if (!mapData || !bitmapData) return;
+  const data = bitmapData.data;
+  const bg = [10, 26, 15]; // #0a1a0f
+
+  for (let row = 0; row < MAP_ROWS; row++) {
+    for (let col = 0; col < MAP_COLS; col++) {
+      const idx = (row * MAP_COLS + col) * 4;
+      const key = `${col},${row}`;
+      const tile = mapData.tiles[key];
+
+      let r, g, b;
+      if (tile && tile.id) {
+        const rgb = getCachedRgb(tileColor(tile.id));
+        r = rgb[0]; g = rgb[1]; b = rgb[2];
+        // Blend overlay color on top (simple 50% mix)
+        if (tile.ov) {
+          const oc = getCachedRgb(overlayColor(tile.ov) || '#555');
+          r = (r + oc[0]) >> 1;
+          g = (g + oc[1]) >> 1;
+          b = (b + oc[2]) >> 1;
+        }
+      } else {
+        r = bg[0]; g = bg[1]; b = bg[2];
+      }
+      data[idx] = r; data[idx + 1] = g; data[idx + 2] = b; data[idx + 3] = 255;
+    }
+  }
+  bitmapCtx.putImageData(bitmapData, 0, 0);
+}
+
+/** Update a single tile on the bitmap (called after painting) */
+function updateBitmapTile(col, row) {
+  if (!bitmapData) return;
+  const idx = (row * MAP_COLS + col) * 4;
+  const key = `${col},${row}`;
+  const tile = mapData.tiles[key];
+  const data = bitmapData.data;
+  const bg = [10, 26, 15];
+
+  let r, g, b;
+  if (tile && tile.id) {
+    const rgb = getCachedRgb(tileColor(tile.id));
+    r = rgb[0]; g = rgb[1]; b = rgb[2];
+    if (tile.ov) {
+      const oc = getCachedRgb(overlayColor(tile.ov) || '#555');
+      r = (r + oc[0]) >> 1; g = (g + oc[1]) >> 1; b = (b + oc[2]) >> 1;
+    }
+  } else {
+    r = bg[0]; g = bg[1]; b = bg[2];
+  }
+  data[idx] = r; data[idx + 1] = g; data[idx + 2] = b; data[idx + 3] = 255;
+  // Flush the single pixel — putImageData for 1 pixel is fast
+  bitmapCtx.putImageData(bitmapData, 0, 0, col, row, 1, 1);
+}
+
 function render() {
   if (!mapData) return;
   const w = canvas.width / devicePixelRatio;
@@ -403,45 +489,36 @@ function render() {
   ctx.fillStyle = '#0a1a0f';
   ctx.fillRect(0, 0, w, h);
 
+  if (!mapBitmap) return;
+
   const tileSize = zoom;
 
-  // Visible tile range
-  const startCol = Math.max(0, Math.floor(camX / tileSize));
-  const startRow = Math.max(0, Math.floor(camY / tileSize));
-  const endCol = Math.min(MAP_COLS - 1, Math.ceil((camX + w) / tileSize));
-  const endRow = Math.min(MAP_ROWS - 1, Math.ceil((camY + h) / tileSize));
+  // Draw the pre-rendered bitmap scaled to current zoom, offset by camera
+  // imageSmoothingEnabled = false gives crisp pixels when zoomed in
+  ctx.imageSmoothingEnabled = zoom >= 4 ? false : true;
+  ctx.drawImage(mapBitmap, 0, 0, MAP_COLS, MAP_ROWS,
+    -camX, -camY, MAP_COLS * tileSize, MAP_ROWS * tileSize);
 
-  // Draw ground tiles
-  for (let row = startRow; row <= endRow; row++) {
+  // Grid lines (only at high zoom, drawn as overlay)
+  if (tileSize >= 8) {
+    const startCol = Math.max(0, Math.floor(camX / tileSize));
+    const startRow = Math.max(0, Math.floor(camY / tileSize));
+    const endCol = Math.min(MAP_COLS, Math.ceil((camX + w) / tileSize));
+    const endRow = Math.min(MAP_ROWS, Math.ceil((camY + h) / tileSize));
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.lineWidth = 0.5;
+    ctx.beginPath();
     for (let col = startCol; col <= endCol; col++) {
       const x = col * tileSize - camX;
-      const y = row * tileSize - camY;
-      const key = `${col},${row}`;
-      const tile = mapData.tiles[key];
-
-      // Ground
-      ctx.fillStyle = tile ? tileColor(tile.id) : '#333';
-      ctx.fillRect(x, y, tileSize, tileSize);
-
-      // Overlay dot
-      if (tile && tile.ov) {
-        const oc = overlayColor(tile.ov);
-        if (oc) {
-          ctx.fillStyle = oc;
-          const dotSize = Math.max(2, tileSize * 0.5);
-          const offset = (tileSize - dotSize) / 2;
-          ctx.beginPath();
-          ctx.arc(x + tileSize / 2, y + tileSize / 2, dotSize / 2, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      }
-
-      // Grid lines (only at reasonable zoom)
-      if (tileSize >= 6) {
-        ctx.strokeStyle = 'rgba(255,255,255,0.06)';
-        ctx.strokeRect(x, y, tileSize, tileSize);
-      }
+      ctx.moveTo(x, startRow * tileSize - camY);
+      ctx.lineTo(x, endRow * tileSize - camY);
     }
+    for (let row = startRow; row <= endRow; row++) {
+      const y = row * tileSize - camY;
+      ctx.moveTo(startCol * tileSize - camX, y);
+      ctx.lineTo(endCol * tileSize - camX, y);
+    }
+    ctx.stroke();
   }
 
   // Draw buildings as labeled rectangles
@@ -488,7 +565,6 @@ function render() {
     ctx.strokeRect(bx, by, bSize, bSize);
   }
 
-  // Update HUD
   updateHUD();
 }
 
@@ -536,6 +612,7 @@ function paintAt(col, row) {
       const after = { id: tile.id, ov: tile.ov };
       if (before.id !== after.id || before.ov !== after.ov) {
         strokeChanges.push({ key, before, after });
+        updateBitmapTile(c, r); // update just the dirty pixel
       }
     }
   }
@@ -577,6 +654,7 @@ function floodFillAt(col, row) {
     undoStack.push(changes);
     if (undoStack.length > MAX_UNDO) undoStack.shift();
     redoStack = [];
+    rebuildBitmap(); // flood fill touches many tiles — full rebuild is faster
   }
   render();
 }
@@ -606,8 +684,14 @@ function undo() {
     const tile = mapData.tiles[ch.key] || (mapData.tiles[ch.key] = {});
     tile.id = ch.before.id;
     tile.ov = ch.before.ov;
+    // Restore entry point if tracked
+    if (ch.epKey) {
+      if (ch.epBefore) mapData.entryPoints[ch.epKey] = ch.epBefore;
+      else delete mapData.entryPoints[ch.epKey];
+    }
   }
   redoStack.push(changes);
+  rebuildBitmap();
   render();
 }
 
@@ -618,8 +702,10 @@ function redo() {
     const tile = mapData.tiles[ch.key] || (mapData.tiles[ch.key] = {});
     tile.id = ch.after.id;
     tile.ov = ch.after.ov;
+    if (ch.epKey && ch.epAfter) mapData.entryPoints[ch.epKey] = ch.epAfter;
   }
   undoStack.push(changes);
+  rebuildBitmap();
   render();
 }
 
@@ -1000,6 +1086,10 @@ function loadMapData(json) {
   undoStack = [];
   redoStack = [];
 
+  // Build the offscreen bitmap from map data
+  if (!mapBitmap) initBitmap();
+  rebuildBitmap();
+
   // Center camera on town center
   camX = 160 * zoom - canvas.width / devicePixelRatio / 2;
   camY = 150 * zoom - canvas.height / devicePixelRatio / 2;
@@ -1093,6 +1183,7 @@ async function loadFromRepo(filename) {
   }
 }
 document.getElementById('btn-load-repo')?.addEventListener('click', () => loadFromRepo('imaginarium-map.json'));
+document.getElementById('btn-load-repo-noroads')?.addEventListener('click', () => loadFromRepo('imaginarium-map-no-roads.json'));
 document.getElementById('btn-load-repo-backup')?.addEventListener('click', () => loadFromRepo('imaginarium-map-v1-backup.json'));
 
 // ============================================================================
