@@ -255,7 +255,13 @@ const OVERLAY_COLORS = {
   'landmark_clock_tower': '#8a5a3a', 'landmark_lighthouse': '#d0d0d0', 'landmark_statue': '#a0a0a0',
 };
 
-// Special display color for random grass brush
+// Random grass sentinel + color (must be before GROUND_TILES)
+const RANDOM_GRASS_ID = '__random_grass__';
+const GRASS_RANDOM_POOL = [
+  'terrain_grass_067', 'terrain_grass_067', 'terrain_grass_067',
+  'terrain_grass_067_Bright', 'terrain_grass_067_C',
+  'terrain_grass_067_NB', 'terrain_grass_067_NB2',
+];
 TILE_COLORS[RANDOM_GRASS_ID] = '#5a8a3a';
 
 // Resolve a selected tile ID — handles random grass
@@ -293,16 +299,6 @@ function overlayColor(id) {
 }
 
 // --- Tile catalog for the palette ---
-// Random grass variant pool (same height tiles, for natural variety)
-const GRASS_RANDOM_POOL = [
-  'terrain_grass_067', 'terrain_grass_067', 'terrain_grass_067',  // dominant
-  'terrain_grass_067_Bright',
-  'terrain_grass_067_C',
-  'terrain_grass_067_NB',
-  'terrain_grass_067_NB2',
-];
-const RANDOM_GRASS_ID = '__random_grass__'; // special sentinel for the random brush
-
 // Ground tiles
 const GROUND_TILES = [
   { id: RANDOM_GRASS_ID, name: 'Random Grass', cat: 'grass' },
